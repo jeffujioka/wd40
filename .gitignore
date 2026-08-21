@@ -1,0 +1,11 @@
+# editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# local scratch
+*.local
+dump*.txt
