@@ -188,5 +188,36 @@ printf '\n== collisions ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== uninstall ==\n'
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  work=$(cd "$tmp" && pwd -P)
+  bin="$work/bin"
+
+  "$INSTALL" --dir "$bin" >/dev/null
+  assert_ok "installed before uninstalling" test -L "$bin/smem-groups"
+
+  assert_ok "uninstall exits 0"      "$INSTALL" --dir "$bin" --uninstall
+  assert_eq "0" "$(ls -1 "$bin" | wc -l | tr -d ' ')" "target directory is empty"
+
+  # A link with our name that is not ours must survive.
+  printf 'someone elses tool\n' > "$work/foreign"
+  ln -s "$work/foreign" "$bin/smem-groups"
+  assert_ok "uninstall exits 0 with a foreign link present" "$INSTALL" --dir "$bin" --uninstall
+  assert_ok "the foreign link survived"                     test -L "$bin/smem-groups"
+
+  # So must a regular file.
+  rm -f "$bin/smem-groups"
+  printf 'not ours\n' > "$bin/smem-groups"
+  "$INSTALL" --dir "$bin" --uninstall >/dev/null
+  assert_eq "not ours" "$(cat "$bin/smem-groups")" "the regular file survived"
+
+  assert_ok "uninstall on a missing directory exits 0" "$INSTALL" --dir "$work/never" --uninstall
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

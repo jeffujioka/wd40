@@ -175,6 +175,41 @@ do_install() {
   [ "$linked" -gt 0 ]
 }
 
+# Remove links this repository owns.
+#
+# The safety rule is resolution-based: a link is removed only when it
+# resolves to a path inside REPO_ROOT. A regular file, or a symlink to
+# someone else's tool, is left alone even when it carries one of our
+# names. --force has no meaning here and is ignored.
+do_uninstall() {
+  local f name dest current removed=0
+
+  [ -d "$BIN_DIR" ] || { printf 'Nothing to do: %s does not exist.\n' "$BIN_DIR"; return 0; }
+
+  while IFS= read -r f; do
+    name=$(link_name_for "$f")
+    dest="$BIN_DIR/$name"
+    [ -L "$dest" ] || continue
+
+    current=$(resolve_path "$dest")
+    case $current in
+      "$REPO_ROOT"/*) ;;
+      *) warn "leaving $name alone: it points outside this repo ($current)"; continue ;;
+    esac
+
+    if [ "$DRY_RUN" = "1" ]; then
+      printf '   remove %s\n' "$dest"
+    else
+      rm -f "$dest"
+      printf '   remove %s\n' "$dest"
+    fi
+    removed=$((removed + 1))
+  done < <(discover_scripts)
+
+  [ "$removed" -gt 0 ] || printf 'Nothing to remove in %s.\n' "$BIN_DIR"
+  return 0
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]
@@ -204,13 +239,16 @@ main() {
     esac
   done
 
-  if [ "$MODE" = "install" ]; then
-    if do_install; then
-      return 0
-    else
-      warn "nothing was installed"
-      return 2
-    fi
+  if [ "$MODE" = "uninstall" ]; then
+    do_uninstall
+    return 0
+  fi
+
+  if do_install; then
+    return 0
+  else
+    warn "nothing was installed"
+    return 2
   fi
 }
 
