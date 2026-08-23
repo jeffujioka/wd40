@@ -82,5 +82,34 @@ printf '\n== resolve_path ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== discovery ==\n'
+(
+  WD40_SOURCE_ONLY=1
+  export WD40_SOURCE_ONLY
+  # shellcheck disable=SC1090
+  . "$INSTALL"
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  fix=$(cd "$tmp" && pwd -P)
+
+  mkdir -p "$fix/scripts/nested"
+  touch "$fix/scripts/alpha.sh"
+  touch "$fix/scripts/beta.py"
+  touch "$fix/scripts/gamma.ps1"
+  touch "$fix/scripts/README.md"
+  touch "$fix/scripts/noext"
+  touch "$fix/scripts/nested/delta.sh"
+
+  found=$(discover_scripts "$fix" | sed "s|^$fix/scripts/||" | tr '\n' ' ')
+  assert_eq "alpha.sh beta.py nested/delta.sh " "$found" "allowlist keeps .sh and .py, recurses"
+
+  skipped=$(discover_ignored "$fix" | sed "s|^$fix/scripts/||" | tr '\n' ' ')
+  assert_eq "README.md gamma.ps1 noext " "$skipped" "everything else is ignored"
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

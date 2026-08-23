@@ -47,6 +47,35 @@ resolve_path() {
   printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
 }
 
+# Extensions this installer is willing to link, as a closed allowlist.
+# Anything else — .md, .txt, .ps1, or no extension at all — is ignored, so
+# a stray README under scripts/ never becomes a command on your PATH.
+#
+# .ps1/.bat/.cmd are deliberately absent: they belong to a Windows
+# installer that does not exist yet.
+is_installable() {
+  case $1 in
+    *.sh|*.py) return 0 ;;
+    *)         return 1 ;;
+  esac
+}
+
+discover_scripts() {
+  local root=${1:-$REPO_ROOT} f
+  [ -d "$root/scripts" ] || return 0
+  find "$root/scripts" -type f | sort | while IFS= read -r f; do
+    if is_installable "$f"; then printf '%s\n' "$f"; fi
+  done
+}
+
+discover_ignored() {
+  local root=${1:-$REPO_ROOT} f
+  [ -d "$root/scripts" ] || return 0
+  find "$root/scripts" -type f | sort | while IFS= read -r f; do
+    if is_installable "$f"; then :; else printf '%s\n' "$f"; fi
+  done
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]
