@@ -76,6 +76,31 @@ discover_ignored() {
   done
 }
 
+# scripts/smem-groups.sh -> smem-groups
+# Only the final extension is stripped, so my.tool.sh -> my.tool.
+link_name_for() {
+  local base
+  base=$(basename "$1")
+  case $base in
+    *.*) printf '%s\n' "${base%.*}" ;;
+    *)   printf '%s\n' "$base" ;;
+  esac
+}
+
+# Print every link name claimed by more than one installable script.
+#
+# Two scripts landing on the same name is a defect in this repository, not
+# a user problem, so the caller fails loudly rather than picking a winner.
+# prune.sh and prune.ps1 never reach here together: the allowlist already
+# dropped the .ps1, which is exactly how a cross-platform pair is meant to
+# behave.
+detect_collisions() {
+  local root=${1:-$REPO_ROOT} f
+  discover_scripts "$root" | while IFS= read -r f; do
+    link_name_for "$f"
+  done | LC_ALL=C sort | uniq -d
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]

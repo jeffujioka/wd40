@@ -111,5 +111,32 @@ printf '\n== discovery ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== link naming ==\n'
+(
+  WD40_SOURCE_ONLY=1
+  export WD40_SOURCE_ONLY
+  # shellcheck disable=SC1090
+  . "$INSTALL"
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  fix=$(cd "$tmp" && pwd -P)
+
+  assert_eq "smem-groups" "$(link_name_for /a/b/smem-groups.sh)" "strips .sh"
+  assert_eq "sync"        "$(link_name_for /a/b/sync.py)"        "strips .py"
+  assert_eq "my.tool"     "$(link_name_for /a/b/my.tool.sh)"     "strips only the last extension"
+  assert_eq "plain"       "$(link_name_for /a/b/plain)"          "leaves an extensionless name alone"
+
+  mkdir -p "$fix/scripts"
+  touch "$fix/scripts/prune.sh" "$fix/scripts/prune.ps1"
+  assert_eq "" "$(detect_collisions "$fix")" "prune.sh and prune.ps1 are different platforms, not a collision"
+
+  touch "$fix/scripts/prune.py"
+  assert_eq "prune" "$(detect_collisions "$fix")" "prune.sh and prune.py both install here, so they collide"
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
