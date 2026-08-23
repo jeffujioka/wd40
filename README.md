@@ -23,8 +23,12 @@ cd wd40
 This symlinks every script into `~/.local/sbin`, dropping the extension,
 so `scripts/smem-groups.sh` becomes the command `smem-groups`.
 
-`~/.local/sbin` is not on `PATH` by default on macOS or Linux. The
-installer tells you the exact line to add if it is missing.
+`~/.local/sbin` is not on `PATH` by default on macOS or Linux. If it's
+missing, the installer adds it to your `~/.bashrc` or `~/.zshrc`
+automatically (a guarded block, like rustup/cargo append — safe to
+re-source, never duplicated on re-run). For any other shell, or if the rc
+file doesn't exist yet, it prints the exact line to add instead. Restart
+your shell (or `source` the rc file) afterwards.
 
 ### Options
 
