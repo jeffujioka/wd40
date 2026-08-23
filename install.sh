@@ -21,6 +21,32 @@ die() {
   exit "${2:-1}"
 }
 
+# Resolve a path to an absolute, symlink-free location.
+#
+# `readlink -f` and `realpath` are GNU extensions absent from stock macOS,
+# so the chain is walked by hand with flagless `readlink`. The 40-hop cap
+# matches the kernel's own ELOOP limit and stops a symlink cycle from
+# hanging the installer.
+#
+# The final component is not required to exist; its parent directory is.
+resolve_path() {
+  local target=$1 link dir base hops=0
+
+  while [ -L "$target" ] && [ "$hops" -lt 40 ]; do
+    link=$(readlink "$target")
+    case $link in
+      /*) target=$link ;;
+      *)  target=$(dirname "$target")/$link ;;
+    esac
+    hops=$((hops + 1))
+  done
+
+  dir=$(dirname "$target")
+  base=$(basename "$target")
+  [ -d "$dir" ] || die "cannot resolve '$1': '$dir' is not a directory"
+  printf '%s/%s\n' "$(cd "$dir" && pwd -P)" "$base"
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]

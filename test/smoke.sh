@@ -55,5 +55,32 @@ printf '\n== argument handling ==\n'
 assert_ok   "--help exits 0"          "$INSTALL" --help
 assert_fail 1 "unknown flag exits 1"  "$INSTALL" --nonsense
 
+printf '\n== resolve_path ==\n'
+(
+  WD40_SOURCE_ONLY=1
+  export WD40_SOURCE_ONLY
+  # shellcheck disable=SC1090
+  . "$INSTALL"
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  real=$(cd "$tmp" && pwd -P)
+
+  printf 'hello\n' > "$real/file"
+  ln -s "$real/file" "$real/link-abs"
+  ( cd "$real" && ln -s file link-rel )
+  ln -s "$real/link-abs" "$real/link-chain"
+
+  assert_eq "$real/file" "$(resolve_path "$real/file")"       "plain file"
+  assert_eq "$real/file" "$(resolve_path "$real/link-abs")"   "absolute symlink"
+  assert_eq "$real/file" "$(resolve_path "$real/link-rel")"   "relative symlink"
+  assert_eq "$real/file" "$(resolve_path "$real/link-chain")" "two-hop chain"
+  assert_eq "$real/file" "$(cd "$real" && resolve_path file)" "relative input"
+  assert_eq "$real/ghost" "$(resolve_path "$real/ghost")"     "missing final component"
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
