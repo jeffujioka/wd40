@@ -63,7 +63,7 @@ is_installable() {
 discover_scripts() {
   local root=${1:-$REPO_ROOT} f
   [ -d "$root/scripts" ] || return 0
-  find "$root/scripts" -type f | sort | while IFS= read -r f; do
+  find "$root/scripts" -type f | LC_ALL=C sort | while IFS= read -r f; do
     if is_installable "$f"; then printf '%s\n' "$f"; fi
   done
 }
@@ -71,7 +71,7 @@ discover_scripts() {
 discover_ignored() {
   local root=${1:-$REPO_ROOT} f
   [ -d "$root/scripts" ] || return 0
-  find "$root/scripts" -type f | sort | while IFS= read -r f; do
+  find "$root/scripts" -type f | LC_ALL=C sort | while IFS= read -r f; do
     if is_installable "$f"; then :; else printf '%s\n' "$f"; fi
   done
 }
