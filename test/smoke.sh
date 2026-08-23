@@ -138,5 +138,30 @@ printf '\n== link naming ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== install ==\n'
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  work=$(cd "$tmp" && pwd -P)
+  bin="$work/nested/does/not/exist/yet"
+
+  assert_ok "install into a missing directory" "$INSTALL" --dir "$bin"
+  assert_ok "symlink was created"              test -L "$bin/smem-groups"
+
+  target=$(readlink "$bin/smem-groups")
+  case $target in
+    /*) pass "symlink target is absolute" ;;
+    *)  fail "symlink target is absolute (got '$target')" ;;
+  esac
+  assert_eq "$REPO/scripts/smem-groups.sh" "$target" "symlink points at the source script"
+
+  assert_ok "the link actually runs"    "$bin/smem-groups" --help
+  assert_ok "re-running is idempotent"  "$INSTALL" --dir "$bin"
+  assert_eq "1" "$(ls -1 "$bin" | wc -l | tr -d ' ')" "re-run created no duplicates"
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

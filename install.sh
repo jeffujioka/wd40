@@ -101,6 +101,58 @@ detect_collisions() {
   done | LC_ALL=C sort | uniq -d
 }
 
+BIN_DIR=${WD40_BIN_DIR:-$HOME/.local/sbin}
+DRY_RUN=0
+FORCE=0
+MODE=install
+
+# Link one script. Returns 1 when the destination was left untouched.
+# The destination-occupied cases are filled in by the collision task.
+install_one() {
+  local src=$1 dest=$2
+
+  if [ "$DRY_RUN" = "1" ]; then
+    printf '   link %s -> %s\n' "$dest" "$src"
+    return 0
+  fi
+
+  chmod +x "$src"
+  # Not `ln -sfn`: BSD and GNU disagree on what -n means. Removing first
+  # and creating fresh behaves identically everywhere.
+  rm -f "$dest"
+  ln -s "$src" "$dest"
+  printf '   link %s -> %s\n' "$dest" "$src"
+  return 0
+}
+
+do_install() {
+  local dupes f name linked=0
+
+  dupes=$(detect_collisions)
+  if [ -n "$dupes" ]; then
+    warn "two scripts claim the same command name:"
+    printf '%s\n' "$dupes" >&2
+    die "rename one of them; refusing to guess" 1
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    printf 'Dry run. Nothing will be changed.\n'
+  else
+    mkdir -p "$BIN_DIR"
+  fi
+
+  # Process substitution, not a pipe: in bash 3.2 a piped `while read` body
+  # runs in a subshell and `linked` would always come back 0.
+  while IFS= read -r f; do
+    name=$(link_name_for "$f")
+    if install_one "$f" "$BIN_DIR/$name"; then
+      linked=$((linked + 1))
+    fi
+  done < <(discover_scripts)
+
+  [ "$linked" -gt 0 ]
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]
@@ -118,11 +170,19 @@ USAGE
 main() {
   while [ $# -gt 0 ]; do
     case $1 in
-      -h|--help) usage; return 0 ;;
+      -d|--dir)
+        [ $# -ge 2 ] || die "$1 requires an argument" 1
+        BIN_DIR=$2; shift 2 ;;
+      --dir=*)      BIN_DIR=${1#--dir=}; shift ;;
+      -n|--dry-run) DRY_RUN=1; shift ;;
+      -f|--force)   FORCE=1; shift ;;
+      -u|--uninstall) MODE=uninstall; shift ;;
+      -h|--help)    usage; return 0 ;;
       *) usage >&2; die "unknown argument '$1'" 1 ;;
     esac
   done
-  return 0
+
+  do_install
 }
 
 # Sourced by test/smoke.sh with WD40_SOURCE_ONLY=1 to unit-test individual
