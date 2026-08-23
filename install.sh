@@ -41,6 +41,8 @@ resolve_path() {
     hops=$((hops + 1))
   done
 
+  [ -L "$target" ] && die "symlink cycle detected resolving '$1'"
+
   dir=$(dirname "$target")
   base=$(basename "$target")
   [ -d "$dir" ] || die "cannot resolve '$1': '$dir' is not a directory"

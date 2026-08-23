@@ -78,6 +78,14 @@ printf '\n== resolve_path ==\n'
   assert_eq "$real/file" "$(cd "$real" && resolve_path file)" "relative input"
   assert_eq "$real/ghost" "$(resolve_path "$real/ghost")"     "missing final component"
 
+  ln -s b "$real/a"
+  ln -s a "$real/b"
+  if ( resolve_path "$real/a" ) >/dev/null 2>&1; then
+    fail "symlink cycle dies"
+  else
+    pass "symlink cycle dies"
+  fi
+
   printf '%d passed, %d failed\n' "$PASS" "$FAIL"
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
