@@ -219,5 +219,38 @@ printf '\n== uninstall ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== dry run and PATH ==\n'
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  work=$(cd "$tmp" && pwd -P)
+  bin="$work/bin"
+
+  assert_ok "dry run exits 0"           "$INSTALL" --dir "$bin" --dry-run
+  assert_fail 1 "dry run created nothing" test -e "$bin"
+
+  out=$("$INSTALL" --dir "$bin" --dry-run 2>&1)
+  case $out in
+    *smem-groups*) pass "dry run names the link it would create" ;;
+    *)             fail "dry run names the link it would create" ;;
+  esac
+
+  out=$(PATH="/usr/bin:/bin" "$INSTALL" --dir "$bin" 2>&1)
+  case $out in
+    *"not in your PATH"*) pass "warns when the directory is off PATH" ;;
+    *)                    fail "warns when the directory is off PATH" ;;
+  esac
+
+  rm -rf "$bin"
+  out=$(PATH="$bin:/usr/bin:/bin" "$INSTALL" --dir "$bin" 2>&1)
+  case $out in
+    *"not in your PATH"*) fail "stays quiet when the directory is on PATH" ;;
+    *)                    pass "stays quiet when the directory is on PATH" ;;
+  esac
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

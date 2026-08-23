@@ -159,6 +159,7 @@ do_install() {
 
   if [ "$DRY_RUN" = "1" ]; then
     printf 'Dry run. Nothing will be changed.\n'
+    report_ignored
   else
     mkdir -p "$BIN_DIR"
   fi
@@ -210,6 +211,30 @@ do_uninstall() {
   return 0
 }
 
+# ~/.local/sbin is deliberate — these scripts stay separate from
+# ~/.local/bin — but no shell puts it on PATH for you, on macOS or Linux.
+# Saying so with the exact line to paste is the difference between a
+# working install and a user wondering why the command is not found.
+warn_if_not_on_path() {
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) return 0 ;;
+  esac
+  printf '\n'
+  warn "$BIN_DIR is not in your PATH."
+  warn "Add this to your shell rc file (~/.zshrc, ~/.bashrc):"
+  printf '\n       export PATH="%s:$PATH"\n\n' "$BIN_DIR" >&2
+}
+
+# Under --dry-run, say which files were passed over. A script named
+# `foo.bash` or `foo.txt` would otherwise vanish with no explanation.
+report_ignored() {
+  local f any=0
+  while IFS= read -r f; do
+    [ "$any" = "1" ] || { printf '\nIgnored (extension not installable here):\n'; any=1; }
+    printf '   %s\n' "$f"
+  done < <(discover_ignored)
+}
+
 usage() {
   cat <<'USAGE'
 Usage: install.sh [options]
@@ -245,6 +270,7 @@ main() {
   fi
 
   if do_install; then
+    [ "$DRY_RUN" = "1" ] || warn_if_not_on_path
     return 0
   else
     warn "nothing was installed"
