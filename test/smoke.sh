@@ -14,6 +14,15 @@ TEST_DIR=$(cd "$(dirname "$0")" && pwd -P)
 REPO=$(cd "$TEST_DIR/.." && pwd -P)
 INSTALL="$REPO/install.sh"
 
+# Sandbox HOME for the whole run: install.sh (via warn_if_not_on_path /
+# add_to_shell_rc) now writes to $HOME/.bashrc or $HOME/.zshrc when BIN_DIR
+# is off PATH. Every test in this file must be free to leave BIN_DIR off
+# PATH without risking a write to the real developer's rc file.
+SMOKE_HOME=$(mktemp -d)
+trap 'rm -rf "$SMOKE_HOME"' EXIT
+HOME="$SMOKE_HOME"
+export HOME
+
 PASS=0
 FAIL=0
 
@@ -243,7 +252,9 @@ printf '\n== dry run and PATH ==\n'
     *)             fail "dry run names the link it would create" ;;
   esac
 
-  out=$(PATH="/usr/bin:/bin" "$INSTALL" --dir "$bin" 2>&1)
+  fakehome="$work/fakehome"
+  mkdir -p "$fakehome"
+  out=$(HOME="$fakehome" PATH="/usr/bin:/bin" "$INSTALL" --dir "$bin" 2>&1)
   case $out in
     *"not in your PATH"*) pass "warns when the directory is off PATH" ;;
     *)                    fail "warns when the directory is off PATH" ;;
@@ -255,6 +266,64 @@ printf '\n== dry run and PATH ==\n'
     *"not in your PATH"*) fail "stays quiet when the directory is on PATH" ;;
     *)                    pass "stays quiet when the directory is on PATH" ;;
   esac
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
+printf '\n== shell rc auto-configuration ==\n'
+(
+  WD40_SOURCE_ONLY=1
+  export WD40_SOURCE_ONLY
+  # shellcheck disable=SC1090
+  . "$INSTALL"
+
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  assert_eq "$tmp/.bashrc" "$(HOME=$tmp rc_file_for_shell bash)" "bash maps to ~/.bashrc"
+  assert_eq "$tmp/.zshrc"  "$(HOME=$tmp rc_file_for_shell zsh)"  "zsh maps to ~/.zshrc"
+  assert_eq "" "$(rc_file_for_shell fish)" "fish has no mapping"
+  assert_eq "" "$(rc_file_for_shell sh)"   "sh has no mapping"
+
+  home="$tmp/home"
+  mkdir -p "$home"
+  BIN_DIR="$tmp/bin"
+
+  # No rc file yet: falls back to the warning, never creates the file.
+  HOME="$home" SHELL=/bin/bash add_to_shell_rc >/dev/null 2>&1
+  assert_fail 1 "no rc file: nothing is created" test -e "$home/.bashrc"
+
+  # rc file exists, BIN_DIR not yet mentioned anywhere in it.
+  printf 'echo hello\n' > "$home/.bashrc"
+  HOME="$home" SHELL=/bin/bash add_to_shell_rc >/dev/null 2>&1
+  case $(cat "$home/.bashrc") in
+    *"added by wd40 install.sh"*"$BIN_DIR"*) pass "appends the guarded block once" ;;
+    *) fail "appends the guarded block once" ;;
+  esac
+
+  before=$(cat "$home/.bashrc")
+  HOME="$home" SHELL=/bin/bash add_to_shell_rc >/dev/null 2>&1
+  after=$(cat "$home/.bashrc")
+  assert_eq "$before" "$after" "re-running does not duplicate the block"
+
+  # Unsupported shell: never touches any file.
+  home2="$tmp/home2"
+  mkdir -p "$home2"
+  printf 'echo hello\n' > "$home2/.bashrc"
+  before2=$(cat "$home2/.bashrc")
+  HOME="$home2" SHELL=/usr/bin/fish add_to_shell_rc >/dev/null 2>&1
+  after2=$(cat "$home2/.bashrc")
+  assert_eq "$before2" "$after2" "unsupported shell leaves rc files untouched"
+
+  # Dry run never writes.
+  home3="$tmp/home3"
+  mkdir -p "$home3"
+  printf 'echo hello\n' > "$home3/.bashrc"
+  before3=$(cat "$home3/.bashrc")
+  HOME="$home3" SHELL=/bin/bash DRY_RUN=1 add_to_shell_rc >/dev/null 2>&1
+  after3=$(cat "$home3/.bashrc")
+  assert_eq "$before3" "$after3" "--dry-run never writes to the rc file"
 
   printf '%d passed, %d failed\n' "$PASS" "$FAIL"
   [ "$FAIL" -eq 0 ] || exit 1

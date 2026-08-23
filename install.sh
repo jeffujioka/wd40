@@ -223,8 +223,7 @@ warn_if_not_on_path() {
   esac
   printf '\n'
   warn "$BIN_DIR is not in your PATH."
-  warn "Add this to your shell rc file (~/.zshrc, ~/.bashrc):"
-  printf '\n       export PATH="%s:$PATH"\n\n' "$BIN_DIR" >&2
+  add_to_shell_rc
 }
 
 # Under --dry-run, say which files were passed over. A script named
@@ -235,6 +234,72 @@ report_ignored() {
     [ "$any" = "1" ] || { printf '\nIgnored (extension not installable here):\n'; any=1; }
     printf '   %s\n' "$f"
   done < <(discover_ignored)
+}
+
+# Map a shell's basename to the rc file it reads on interactive startup.
+# Only bash and zsh are supported: fish uses entirely different syntax
+# (`set -x PATH ...` in ~/.config/fish/config.fish) and sh/dash/ksh have
+# no single conventional rc file. Anything else prints empty, and the
+# caller falls back to the existing text-only warning.
+rc_file_for_shell() {
+  case $1 in
+    bash) printf '%s/.bashrc\n' "$HOME" ;;
+    zsh)  printf '%s/.zshrc\n'  "$HOME" ;;
+    *)    printf '\n' ;;
+  esac
+}
+
+# Add BIN_DIR to PATH for future shells, for bash/zsh only.
+#
+# Appends a guarded block (the same pattern rustup/cargo use) instead of a
+# bare export: the guard checks $PATH at shell-start time, so the block is
+# safe even if it somehow ends up in the file more than once. To avoid
+# growing the file on every re-run, skip appending if $BIN_DIR already
+# appears anywhere in the rc file - literal string match, not limited to
+# our own block, so a PATH entry the user added by hand also counts.
+add_to_shell_rc() {
+  local shell_name rc
+
+  shell_name=$(basename "${SHELL:-}")
+  rc=$(rc_file_for_shell "$shell_name")
+
+  if [ -z "$rc" ]; then
+    warn "$BIN_DIR is not in your PATH, and I don't know how to configure"
+    warn "$shell_name automatically. Add this to your shell's startup file:"
+    printf '\n       export PATH="%s:$PATH"\n\n' "$BIN_DIR" >&2
+    return 0
+  fi
+
+  if [ ! -f "$rc" ]; then
+    warn "$BIN_DIR is not in your PATH. $rc does not exist yet, so add"
+    warn "this to it (or your shell's startup file) by hand:"
+    printf '\n       export PATH="%s:$PATH"\n\n' "$BIN_DIR" >&2
+    return 0
+  fi
+
+  if grep -F "$BIN_DIR" "$rc" >/dev/null 2>&1; then
+    warn "$BIN_DIR is not in your PATH for this session, but $rc already"
+    warn "mentions it - restart your shell, or run: source $rc"
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    printf '\nWould add this block to %s:\n' "$rc"
+    printf '   # added by wd40 install.sh\n'
+    printf '   if [[ ":$PATH:" != *":%s:"* ]]; then\n' "$BIN_DIR"
+    printf '     export PATH="%s:$PATH"\n' "$BIN_DIR"
+    printf '   fi\n'
+    return 0
+  fi
+
+  {
+    printf '\n# added by wd40 install.sh\n'
+    printf 'if [[ ":$PATH:" != *":%s:"* ]]; then\n' "$BIN_DIR"
+    printf '  export PATH="%s:$PATH"\n' "$BIN_DIR"
+    printf 'fi\n'
+  } >> "$rc"
+
+  warn "$BIN_DIR was added to $rc. Restart your shell, or run: source $rc"
 }
 
 usage() {
