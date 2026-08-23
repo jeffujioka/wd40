@@ -107,9 +107,31 @@ FORCE=0
 MODE=install
 
 # Link one script. Returns 1 when the destination was left untouched.
-# The destination-occupied cases are filled in by the collision task.
+#
+# Ownership is decided by resolving the existing symlink, never by its
+# name: a user's unrelated `smem-groups` on their PATH must survive.
 install_one() {
-  local src=$1 dest=$2
+  local src=$1 dest=$2 current
+
+  if [ -L "$dest" ]; then
+    current=$(resolve_path "$dest")
+    case $current in
+      "$REPO_ROOT"/*)
+        : ;;  # ours already - replacing it is what makes re-runs idempotent
+      *)
+        if [ "$FORCE" != "1" ]; then
+          warn "skipping $(basename "$dest"): symlink points outside this repo ($current)"
+          warn "  use --force to replace it"
+          return 1
+        fi ;;
+    esac
+  elif [ -e "$dest" ]; then
+    if [ "$FORCE" != "1" ]; then
+      warn "skipping $(basename "$dest"): a regular file is already there"
+      warn "  use --force to replace it"
+      return 1
+    fi
+  fi
 
   if [ "$DRY_RUN" = "1" ]; then
     printf '   link %s -> %s\n' "$dest" "$src"
@@ -182,7 +204,14 @@ main() {
     esac
   done
 
-  do_install
+  if [ "$MODE" = "install" ]; then
+    if do_install; then
+      return 0
+    else
+      warn "nothing was installed"
+      return 2
+    fi
+  fi
 }
 
 # Sourced by test/smoke.sh with WD40_SOURCE_ONLY=1 to unit-test individual

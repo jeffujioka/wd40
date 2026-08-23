@@ -163,5 +163,30 @@ printf '\n== install ==\n'
   [ "$FAIL" -eq 0 ] || exit 1
 ) || FAIL=$((FAIL + 1))
 
+printf '\n== collisions ==\n'
+(
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  work=$(cd "$tmp" && pwd -P)
+  bin="$work/bin"
+  mkdir -p "$bin"
+
+  printf 'not ours\n' > "$bin/smem-groups"
+  assert_fail 2 "a regular file blocks the install" "$INSTALL" --dir "$bin"
+  assert_eq "not ours" "$(cat "$bin/smem-groups")" "the regular file was left intact"
+
+  assert_ok "--force overwrites the regular file" "$INSTALL" --dir "$bin" --force
+  assert_ok "it is a symlink now"                 test -L "$bin/smem-groups"
+
+  rm -f "$bin/smem-groups"
+  printf 'someone elses tool\n' > "$work/foreign"
+  ln -s "$work/foreign" "$bin/smem-groups"
+  assert_fail 2 "a foreign symlink blocks the install" "$INSTALL" --dir "$bin"
+  assert_eq "$work/foreign" "$(readlink "$bin/smem-groups")" "the foreign symlink still points where it did"
+
+  printf '%d passed, %d failed\n' "$PASS" "$FAIL"
+  [ "$FAIL" -eq 0 ] || exit 1
+) || FAIL=$((FAIL + 1))
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
