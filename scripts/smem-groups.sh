@@ -2,6 +2,8 @@
 #
 # smem-groups.sh - aggregate `smem -tk` output by process group.
 #
+# wd40: smem-groups - aggregate `smem -tk` output by process group
+#
 # `smem` lists one line per process, which is useless once you have 100+
 # processes. This script sums Swap/USS/PSS/RSS per category (vscode-server,
 # opencode, claude, shells, ...) and shows the footprint (PSS+Swap column).
