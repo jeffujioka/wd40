@@ -341,6 +341,16 @@ def cmd_top(args):
         print_table(entries, console, extensions, show_jid=True)
 
 
+def fuzzy_match(pattern, text):
+    if pattern == pattern.lower():
+        text = text.lower()
+    pi = 0
+    for char in text:
+        if pi < len(pattern) and char == pattern[pi]:
+            pi += 1
+    return pi == len(pattern)
+
+
 def cmd_search(args):
     if not os.path.isdir(MEDIA_DIR):
         print(f"Media directory not found: {MEDIA_DIR}", file=sys.stderr)
@@ -348,12 +358,14 @@ def cmd_search(args):
 
     console = Console()
     extensions = get_extensions(args)
-    query = args.query.lower()
-
     entries = scan_chats(extensions)
     enrich_entries(entries)
 
-    results = [e for e in entries if query in e["chat"].lower() or query in e["jid"].lower()]
+    tokens = args.query.split()
+    results = [
+        e for e in entries
+        if all(fuzzy_match(t, e["chat"]) or fuzzy_match(t, e["jid"]) for t in tokens)
+    ]
 
     if not results:
         console.print(f"[dim]No match for '{args.query}'[/dim]")
