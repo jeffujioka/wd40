@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# wd40rc - unified shell entrypoint sourced by interactive shells.
+#
+# wd40: wd - shorthand for whatsapp-diskusage
+#
+# This file is sourced into a live shell and is never executed directly.
+# The shebang tells editors and shellcheck which language this is.
+#
+# Nothing here changes a shell option. Those would leak into the caller's
+# interactive shell.
+#
+# Targets bash 3.2 (stock macOS) and zsh. Every variable is local or
+# prefixed _wd40_ to avoid clobbering the caller's shell state.
+
+# Resolve the real path of this file so sibling scripts in the repo can
+# be sourced without knowing where the repo lives.
+#
+# When install.sh symlinks this file to ~/.config/wd40/wd40rc, the shell
+# sees the symlink path. readlink (one level, no -f) gives the repo target,
+# which is always a direct link - install.sh never creates chains.
+#
+# bash: BASH_SOURCE[0] is the file being sourced.
+# zsh:  $0 at top-level source context is the file being sourced.
+#       (Inside a function $0 is the function name, but here we are at the
+#       top level of the file, so $0 is reliable.)
+if [ -n "${BASH_VERSION:-}" ]; then
+  _wd40_me="${BASH_SOURCE[0]}"
+else
+  _wd40_me="$0"
+fi
+if [ -L "$_wd40_me" ]; then
+  _wd40_link=$(readlink "$_wd40_me")
+  case "$_wd40_link" in
+    /*) _wd40_me="$_wd40_link" ;;
+    *)  _wd40_me="$(dirname "$_wd40_me")/$_wd40_link" ;;
+  esac
+fi
+_wd40_dir=$(dirname "$_wd40_me")
+unset _wd40_me _wd40_link
+
+[ -r "$_wd40_dir/wd40-paths.sh" ] && . "$_wd40_dir/wd40-paths.sh"
+unset _wd40_dir
+
+wd() { whatsapp-diskusage "$@"; }

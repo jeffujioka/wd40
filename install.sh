@@ -84,20 +84,6 @@ is_installable() {
   esac
 }
 
-# The allowlist for shell/ is narrower, and .sh is the whole of it.
-#
-# A .py file is perfectly installable as a script, and completely
-# meaningless as something an interactive shell sources - there is no
-# reading of `. foo.py` that works. The two allowlists are separate
-# because the question they answer is different: scripts/ asks "can this
-# be run?", shell/ asks "can this be sourced?".
-is_installable_shell_file() {
-  case $1 in
-    *.sh) return 0 ;;
-    *)    return 1 ;;
-  esac
-}
-
 discover_scripts() {
   local root=${1:-$REPO_ROOT} f
   [ -d "$root/scripts" ] || return 0
@@ -111,25 +97,6 @@ discover_ignored() {
   [ -d "$root/scripts" ] || return 0
   find "$root/scripts" -type f | LC_ALL=C sort | while IFS= read -r f; do
     if is_installable "$f"; then :; else printf '%s\n' "$f"; fi
-  done
-}
-
-# A clone with no shell/ directory is not an error, it is an older clone:
-# discovery yields nothing and the rest of the run carries on installing
-# scripts. That is the same guard scripts/ has, for the same reason.
-discover_shell_files() {
-  local root=${1:-$REPO_ROOT} f
-  [ -d "$root/shell" ] || return 0
-  find "$root/shell" -type f | LC_ALL=C sort | while IFS= read -r f; do
-    if is_installable_shell_file "$f"; then printf '%s\n' "$f"; fi
-  done
-}
-
-discover_ignored_shell_files() {
-  local root=${1:-$REPO_ROOT} f
-  [ -d "$root/shell" ] || return 0
-  find "$root/shell" -type f | LC_ALL=C sort | while IFS= read -r f; do
-    if is_installable_shell_file "$f"; then :; else printf '%s\n' "$f"; fi
   done
 }
 
@@ -230,17 +197,6 @@ link_name_for() {
   esac
 }
 
-# shell/wd40-paths.sh -> wd40-paths.sh
-#
-# The extension survives here, and it is the same reasoning that strips it
-# next door reaching the opposite conclusion. A script's name is typed at
-# a prompt, where `.sh` is noise. A shell file's name is matched by a
-# loader globbing *.sh, and a symlink called `wd40-paths` would be passed
-# over in silence - no error, no output, just functions that never exist.
-shell_link_name_for() {
-  basename "$1"
-}
-
 # Print every link name claimed by more than one installable file, given
 # the function that enumerates the files and the one that names them.
 #
@@ -262,15 +218,6 @@ collisions_for() {
 # behave.
 detect_collisions() {
   collisions_for discover_scripts link_name_for "${1:-$REPO_ROOT}"
-}
-
-# Asked separately from the above because a collision is a property of a
-# destination, not of a name. scripts/foo.sh and shell/foo.sh land in
-# different directories under different names and do not collide. Two
-# files under shell/ do, which recursive discovery makes reachable:
-# shell/a/x.sh and shell/b/x.sh both want SHELL_DIR/x.sh.
-detect_shell_collisions() {
-  collisions_for discover_shell_files shell_link_name_for "${1:-$REPO_ROOT}"
 }
 
 # $HOME is read as ${HOME:-} here and everywhere else in this file.
@@ -297,7 +244,7 @@ detect_shell_collisions() {
 # shell reads at startup, and that step names HOME as the problem itself;
 # see have_home below.
 BIN_DIR=${WD40_BIN_DIR:-${HOME:+$HOME/.local/sbin}}
-SHELL_DIR=${WD40_SHELL_DIR:-${HOME:+$HOME/.zsh_aliases.d}}
+RC_DIR=${WD40_RC_DIR:-${HOME:+$HOME/.config/wd40}}
 DRY_RUN=0
 FORCE=0
 MODE=install
@@ -310,7 +257,7 @@ MODE=install
 # absent HOME, which they cannot. Recording which produced the value is the
 # only way for one check to say either.
 BIN_DIR_FROM_FLAG=0
-SHELL_DIR_FROM_FLAG=0
+RC_DIR_FROM_FLAG=0
 
 # The rc files this run will write to, one per line, when --rc was given.
 #
@@ -348,7 +295,7 @@ RC_FROM_FLAG=0
 # and remove_one may no longer give as an exit status, for exactly the
 # reason their callers may no longer ask for one.
 LINKED=0
-SHELL_LINKED=0
+RC_LINKED=0
 LAST_LINKED=0
 LAST_REMOVED=0
 
@@ -482,7 +429,7 @@ warn_if_not_creatable() {
 }
 
 do_install() {
-  local dupes f name shell_files bin_ok=1 shell_ok=1
+  local dupes f name rc_file bin_ok=1 rc_ok=1
 
   refuse_newline_names
 
@@ -493,48 +440,26 @@ do_install() {
     die "rename one of them; refusing to guess" 1
   fi
 
-  dupes=$(detect_shell_collisions)
-  if [ -n "$dupes" ]; then
-    warn "two shell files claim the same name:"
-    printf '%s\n' "$dupes" >&2
-    die "rename one of them; refusing to guess" 1
-  fi
-
-  shell_files=$(discover_shell_files)
+  rc_file="$REPO_ROOT/shell/wd40rc"
 
   if [ "$DRY_RUN" = "1" ]; then
     printf 'Dry run. Nothing will be changed.\n'
     report_ignored
-    # Said before the link lines rather than after them, so that the
-    # caveat is read before the promise it qualifies. The shell directory
-    # is asked about only when something would go in it, which is the same
-    # condition the mkdir below is under.
     warn_if_not_creatable "$BIN_DIR" script
-    if [ -n "$shell_files" ]; then
-      warn_if_not_creatable "$SHELL_DIR" shell
+    if [ -f "$rc_file" ]; then
+      warn_if_not_creatable "$RC_DIR" config
     fi
   else
-    # Said before anything is created, as report_ignored is said before the
-    # link lines, so that what the run passed over is read before what it
-    # did.
     warn_about_symlinks
-    # mkdir says why on its own stderr - permission denied, file exists -
-    # and this says which directory, and which of the two kinds it was for.
-    # Neither failure ends the run: the other kind is still installable,
-    # and FAILED is what stops the run claiming success at the end.
     if ! mkdir -p "$BIN_DIR"; then
       warn "cannot create the script directory $BIN_DIR"
       bin_ok=0
       FAILED=1
     fi
-    # Only when there is something to put in it. SHELL_DIR defaults into
-    # the user's home directory, and creating an empty one on a clone that
-    # ships no shell files leaves litter nobody asked for and nothing
-    # removes.
-    if [ -n "$shell_files" ]; then
-      if ! mkdir -p "$SHELL_DIR"; then
-        warn "cannot create the shell directory $SHELL_DIR"
-        shell_ok=0
+    if [ -f "$rc_file" ]; then
+      if ! mkdir -p "$RC_DIR"; then
+        warn "cannot create the config directory $RC_DIR"
+        rc_ok=0
         FAILED=1
       fi
     fi
@@ -550,13 +475,10 @@ do_install() {
     done < <(discover_scripts)
   fi
 
-  if [ "$shell_ok" = "1" ]; then
-    while IFS= read -r f; do
-      name=$(shell_link_name_for "$f")
-      install_one "$f" "$SHELL_DIR/$name"
-      LINKED=$((LINKED + LAST_LINKED))
-      SHELL_LINKED=$((SHELL_LINKED + LAST_LINKED))
-    done < <(discover_shell_files)
+  if [ "$rc_ok" = "1" ] && [ -f "$rc_file" ]; then
+    install_one "$rc_file" "$RC_DIR/wd40rc"
+    LINKED=$((LINKED + LAST_LINKED))
+    RC_LINKED=$((RC_LINKED + LAST_LINKED))
   fi
 }
 
@@ -626,24 +548,12 @@ do_uninstall() {
     done < <(discover_scripts)
   fi
 
-  if [ -d "$SHELL_DIR" ]; then
-    while IFS= read -r f; do
-      dest="$SHELL_DIR/$(shell_link_name_for "$f")"
-      remove_one "$dest"
-      removed=$((removed + LAST_REMOVED))
-    done < <(discover_shell_files)
+  if [ -d "$RC_DIR" ]; then
+    remove_one "$RC_DIR/wd40rc"
+    removed=$((removed + LAST_REMOVED))
   fi
 
-  # One closing line naming both directories, rather than one line each.
-  # An uninstall is a single request, and a directory that does not exist
-  # is indistinguishable to the user from one that holds nothing of ours -
-  # in both cases the answer is "there was nothing here to take away", and
-  # saying it twice reads like something went wrong twice.
-  #
-  # Nothing follows it. The unconditional `return 0` that used to is what
-  # made a failed uninstall indistinguishable from a clean one; a removal
-  # that did not happen now leaves through remove_one's die.
-  [ "$removed" -gt 0 ] || printf 'Nothing to remove in %s or %s.\n' "$BIN_DIR" "$SHELL_DIR"
+  [ "$removed" -gt 0 ] || printf 'Nothing to remove in %s or %s.\n' "$BIN_DIR" "$RC_DIR"
 }
 
 # ~/.local/sbin is deliberate — these scripts stay separate from
@@ -757,7 +667,7 @@ report_ignored() {
   while IFS= read -r f; do
     [ "$any" = "1" ] || { printf '\nIgnored (extension not installable here):\n'; any=1; }
     printf '   %s\n' "$f"
-  done < <(discover_ignored; discover_ignored_shell_files)
+  done < <(discover_ignored)
 
   any=0
   while IFS= read -r f; do
@@ -1086,6 +996,21 @@ strip_trailing_slashes() {
   printf '%s\n' "$dir"
 }
 
+# Return DIR as $HOME/... when it is under $HOME, otherwise unchanged.
+#
+# Used when writing blocks to rc files: the user's existing blocks all use
+# the $HOME form and the generated block should match that style. It also
+# avoids baking the current user's expanded home path into a file that may
+# be shared or restored on a machine with a different username.
+home_rel() {
+  local dir=$1
+  [ -n "${HOME:-}" ] || { printf '%s\n' "$dir"; return 0; }
+  case $dir in
+    "${HOME}"/*) printf '$HOME%s\n' "${dir#$HOME}" ;;
+    *)           printf '%s\n' "$dir" ;;
+  esac
+}
+
 # Print every spelling a startup file might plausibly use for DIR.
 #
 # A directory is one path and four strings. The author's ~/.zsh_aliases
@@ -1197,10 +1122,11 @@ shell_display_name() {
 # at shell-start time, so the block is a no-op in a shell that already has
 # the directory - which is what makes a redundant copy harmless.
 print_path_block() {
-  local indent=$1
+  local indent=$1 rel
+  rel=$(home_rel "$BIN_DIR")
   printf '%s# added by wd40 install.sh\n' "$indent"
-  printf '%sif [[ ":$PATH:" != *":%s:"* ]]; then\n' "$indent" "$BIN_DIR"
-  printf '%s  export PATH="%s:$PATH"\n' "$indent" "$BIN_DIR"
+  printf '%sif [[ ! "$PATH" == *"%s"* ]]; then\n' "$indent" "$rel"
+  printf '%s  export PATH="%s:${PATH:+${PATH}:}"\n' "$indent" "$rel"
   printf '%sfi\n' "$indent"
 }
 
@@ -1421,151 +1347,42 @@ add_to_shell_rc() {
 }
 
 
-# Print the loader block for SHELL_DIR, every line prefixed with INDENT.
+# Print the source block for wd40rc, every line prefixed with INDENT.
 #
 # One copy, three callers: the block appended to an rc file, the block
 # shown under --dry-run, and the block printed for a shell this installer
 # cannot configure. What a user pastes by hand has to be what the
-# installer would have written, and the surest way to guarantee that is
-# for there to be only one of it.
+# installer would have written.
 #
-# The directory is written out expanded rather than as "$HOME/...":
-# SHELL_DIR may be anywhere, including outside the home directory
-# entirely, and the PATH block above already writes an expanded path. One
-# rule for both, not one each.
-#
-# The -d guard keeps the block harmless if the directory is later removed.
-#
-# The test is -r, not -x. Sourcing is a read; demanding the executable bit
-# on a file that is never executed is a trap for the next person who
-# copies one in by hand. A stricter loader that does want -x still works,
-# because install_one sets the bit anyway.
-#
-# Every name the block introduces is prefixed and taken back out again, so
-# that nothing it sources can see them and nothing survives it.
-#
-# WHY THIS IS A FUNCTION AND NOT A BARE `if`
-#
-# zsh has NO_MATCH on by default, and under it a glob that matches nothing
-# is a fatal error that aborts the *enclosing file*. A SHELL_DIR that
-# exists but holds no *.sh - which is exactly what `--uninstall` leaves
-# behind on a machine where the user kept nothing else there - would print
-# "no matches found:" and silently stop every later line of the user's
-# .zshrc from running. bash is unaffected: an unmatched glob stays a
-# literal there and the `[ -r ]` test rejects it.
-#
-# NO_MATCH therefore has to be off across the glob, and a shell option
-# cannot be scoped to anything smaller than a function. Hence the wrapper.
-#
-# WHY AN EXPLICIT SAVE/RESTORE AND NOT `setopt local_options null_glob`
-#
-# `local_options` would be one line instead of four, and it was rejected
-# because it restores *every* option when the function returns. A file the
-# loop sources that deliberately runs `setopt extended_glob` would have it
-# rolled back on the way out, and would have no way of knowing. Saving and
-# restoring NOMATCH by hand touches NOMATCH and nothing else - and leaves
-# it off for a user who had already turned it off, which is the other half
-# of "restore what you found".
-#
-# `[[ -o nomatch ]]` is the only honest way to ask: `setopt` with no
-# arguments does not list an option sitting at its default, so reading its
-# output would answer "off" for a shell where NOMATCH is on. It is fenced
-# behind $ZSH_VERSION so bash only ever parses it, never runs it.
-#
-# `unset` and `return 0` come last so the block cannot hand a non-zero
-# status to an rc file sourced under the caller's `set -e`.
-#
-# Sourcing happens inside the function, and that changes nothing: in both
-# shells a `.` inside a function still defines aliases, functions, and
-# undeclared variables globally.
-print_loader_block() {
-  local indent=$1
+# The path is written as $HOME/... so the block is portable across
+# machines with different usernames, and matches the style of the PATH
+# blocks already in the user's rc files.
+print_source_block() {
+  local indent=$1 rel
+  rel=$(home_rel "$RC_DIR")
   printf '%s# added by wd40 install.sh\n' "$indent"
-  printf '%s_wd40_load_aliases() {\n' "$indent"
-  printf '%s  [ -d "%s" ] || return 0\n' "$indent" "$SHELL_DIR"
-  printf '%s  if [ -n "${ZSH_VERSION:-}" ]; then\n' "$indent"
-  printf '%s    _wd40_nomatch=off\n' "$indent"
-  printf '%s    if [[ -o nomatch ]]; then _wd40_nomatch=on; fi\n' "$indent"
-  printf '%s    setopt no_nomatch\n' "$indent"
-  printf '%s  fi\n' "$indent"
-  printf '%s  for _wd40_alias_file in "%s"/*.sh; do\n' "$indent" "$SHELL_DIR"
-  printf '%s    [ -r "$_wd40_alias_file" ] && . "$_wd40_alias_file"\n' "$indent"
-  printf '%s  done\n' "$indent"
-  printf '%s  if [ "${_wd40_nomatch:-off}" = on ]; then setopt nomatch; fi\n' "$indent"
-  printf '%s  unset _wd40_alias_file _wd40_nomatch\n' "$indent"
-  printf '%s  return 0\n' "$indent"
-  printf '%s}\n' "$indent"
-  printf '%s_wd40_load_aliases\n' "$indent"
-  printf '%sunset -f _wd40_load_aliases\n' "$indent"
+  printf '%sif [ -r "%s/wd40rc" ]; then\n' "$indent" "$rel"
+  printf '%s  . "%s/wd40rc"\n' "$indent" "$rel"
+  printf '%sfi\n' "$indent"
 }
 
-# Print the first startup file that already names SHELL_DIR, or nothing.
-#
-# This is a guess and cannot be anything else: install.sh is a bash
-# process holding none of the user's interactive state, so all it can do
-# is read the files that state usually comes from and look for the
-# directory as a literal string.
-#
-# The list is wider than the rc file on purpose, and so is the set of
-# strings looked for. On the author's machine ~/.zshrc sources
-# ~/.zsh_aliases, and it is *that* file which names ~/.zsh_aliases.d - by
-# a tilde, not by the expanded path. Being narrow in either dimension
-# reports a confident false negative and appends a second, redundant
-# loader to a configuration that already worked.
-#
-# WHY THIS IS PER SHELL AND NOT ONE ANSWER FOR THE MACHINE
-#
-# This function used to take the whole list at once and hand back a single
-# yes or no. With one rc file being written that was merely coarse; with
-# every known rc file being written it is wrong in the way that matters.
-# The author's ~/.zsh_aliases names the aliases directory, so the global
-# answer was "already handled" - and bash, which never reads that file,
-# would have been passed over. That is the very defect this change exists
-# to remove, reappearing one function further down.
-#
-# So the search is scoped to the startup chain of the shell whose rc file
-# is being considered: see rc_chain_for for the two chains and for what an
-# unrecognised file gets. mentioned_in_chain is what asks.
-shell_dir_mentioned_in() {
-  # shell_dir_mentioned_in RC_FILE
-  mentioned_in_chain "$1" "$SHELL_DIR"
-}
+# Warn when wd40rc is not yet sourced by the user's startup files, then
+# offer to wire it up.
+warn_if_not_sourced() {
+  local t pending=0 handled=0 rc_path
 
-# Symlinking a file into SHELL_DIR does nothing at all unless something
-# sources it, and unlike a missing PATH entry the failure is silent: no
-# "command not found", just functions that were never defined. Saying so,
-# and naming the file that already handles it when one does, is the
-# difference between a working install and a user wondering what happened.
-#
-# The condition is counted across the whole target set before a word of it
-# is said, exactly as warn_if_not_on_path counts, and for the same reason:
-# with per-shell scoping "is it wired up?" has one answer per shell, and
-# the headline has to be true of all of them at once.
-#
-# There is no equivalent of the live $PATH here, so there is no equivalent
-# of that function's silence: this one always speaks when a shell file was
-# linked. Asking the shell itself (`$SHELL -i -c 'command -v fp'`)
-# would give a live answer and was rejected long ago - it executes an
-# arbitrary rc file, it is slow, it fails headless, and `timeout` is not on
-# a stock macOS, so an rc that hangs would hang the installer with no way
-# out. Naming the file that handles it is the most this can honestly say,
-# and it says it every time.
-warn_if_aliases_not_loaded() {
-  local t pending=0 handled=0
+  rc_path="$RC_DIR/wd40rc"
 
-  # Without a home directory there are no startup files to search, so the
-  # condition this function names is not "nothing mentions it" - which
-  # would be a claim it never checked - but "I could not look".
   if ! have_home && [ "$RC_FROM_FLAG" != "1" ]; then
     printf '\n' >&2
-    warn "HOME is not set, so I cannot tell whether anything already sources $SHELL_DIR."
-    add_loader_to_shell_rc
+    warn "HOME is not set, so I cannot tell whether anything already sources $rc_path."
+    add_source_to_shell_rc
     return 0
   fi
 
   while IFS= read -r t; do
     [ -n "$t" ] || continue
-    if [ -n "$(mentioned_in_chain "$t" "$SHELL_DIR")" ]; then
+    if [ -n "$(mentioned_in_chain "$t" "$rc_path")" ]; then
       handled=$((handled + 1))
     else
       pending=$((pending + 1))
@@ -1574,40 +1391,25 @@ warn_if_aliases_not_loaded() {
 
   printf '\n' >&2
   if [ "$handled" -eq 0 ]; then
-    # Which includes the machine with no rc file at all: nothing there
-    # mentions it either, and the sentence is true of both.
-    warn "nothing in your startup files mentions $SHELL_DIR."
+    warn "nothing in your startup files sources $rc_path."
   elif [ "$pending" -eq 0 ]; then
-    warn "$SHELL_DIR is already sourced by your startup files."
+    warn "$rc_path is already sourced by your startup files."
   else
-    warn "$SHELL_DIR is not sourced by every shell's startup files."
+    warn "$rc_path is not sourced by every shell's startup files."
   fi
-  add_loader_to_shell_rc
+  add_source_to_shell_rc
 }
 
-# Append the loader block to every rc file this run targets.
-#
-# The same shape as add_to_shell_rc above, including the per-target check
-# that stops a re-run from growing a file. That check is not a backstop any
-# more - it is the decision itself, made once per shell, and it is what
-# stops the author's ~/.zsh_aliases from speaking for bash.
-#
-# The division of labour is the same too: warn_if_aliases_not_loaded names
-# the condition, and every branch here says only what is being done about
-# it.
-add_loader_to_shell_rc() {
-  local t found label written= handled= any=0 reported= before
+# Append the source block to every rc file this run targets.
+add_source_to_shell_rc() {
+  local t found label written= handled= any=0 reported= before rc_path
 
-  # reported dedupes the per-target "already mentions" line exactly as it
-  # does in add_to_shell_rc, and for the same reason: see the comment
-  # there for why two targets on one chain can only ever agree, and why
-  # two targets on different shells' chains can never share a $found.
+  rc_path="$RC_DIR/wd40rc"
 
-  # As in add_to_shell_rc, and for the same reason.
   if ! have_home && [ "$RC_FROM_FLAG" != "1" ]; then
     warn "HOME is not set, so I cannot find your shell's startup file. Add this"
     warn "to it by hand:"
-    print_loader_block '       '
+    print_source_block '       '
     printf '\n'
     return 0
   fi
@@ -1617,35 +1419,29 @@ add_loader_to_shell_rc() {
     any=1
     label=$(shell_for_rc "$t")
     [ -z "$label" ] || label="$label: "
-    found=$(mentioned_in_chain "$t" "$SHELL_DIR")
+    found=$(mentioned_in_chain "$t" "$rc_path")
 
     if [ -n "$found" ]; then
-      # The directory is named back to the user here and nowhere else in
-      # the report, because this is the line that claims a particular file
-      # handles a particular directory. The ` - ` is what ends the path:
-      # without it, a message about `/x/sd` would read as a claim about
-      # `/x/sd/` too.
       handled=$(append_line "$handled" "$found")
       before=$reported
       reported=$(append_unique "$reported" "$found")
       if [ "$reported" != "$before" ]; then
-        warn "   $label$found already mentions $SHELL_DIR - nothing to do"
+        warn "   $label$found already sources $rc_path - nothing to do"
       fi
       continue
     fi
 
     if [ "$DRY_RUN" = "1" ]; then
-      # Before the block, as in add_to_shell_rc and for the same reason.
-      warn "   ${label}a loader would be added to $t"
+      warn "   ${label}a source block would be added to $t"
       printf 'Would add this block to %s:\n' "$t"
-      print_loader_block '   '
+      print_source_block '   '
       printf '\n'
     else
       {
         printf '\n'
-        print_loader_block ''
+        print_source_block ''
       } >> "$t"
-      warn "   ${label}a loader was added to $t"
+      warn "   ${label}a source block was added to $t"
     fi
     written=$(append_line "$written" "$t")
   done < <(rc_targets)
@@ -1653,7 +1449,7 @@ add_loader_to_shell_rc() {
   if [ "$any" = "0" ]; then
     warn "I found no startup file for $(shell_display_name "$(interactive_shell_name)"). Add this"
     warn "to your shell's startup file:"
-    print_loader_block '       '
+    print_source_block '       '
     printf '\n'
     return 0
   fi
@@ -1686,23 +1482,23 @@ require_destinations() {
   if [ -z "$BIN_DIR" ] && [ "$BIN_DIR_FROM_FLAG" = "1" ]; then
     die "--dir requires an argument" 1
   fi
-  if [ -z "$SHELL_DIR" ] && [ "$SHELL_DIR_FROM_FLAG" = "1" ]; then
-    die "--shell-dir requires an argument" 1
+  if [ -z "$RC_DIR" ] && [ "$RC_DIR_FROM_FLAG" = "1" ]; then
+    die "--rc-dir requires an argument" 1
   fi
 
   # Anything still empty was left to a default that had no HOME to expand,
   # which is the only origin left once the flags above have been answered.
-  [ -z "$BIN_DIR" ] || [ -z "$SHELL_DIR" ] || return 0
+  [ -z "$BIN_DIR" ] || [ -z "$RC_DIR" ] || return 0
 
-  if [ -z "$BIN_DIR" ] && [ -z "$SHELL_DIR" ]; then
-    what='--dir DIR and --shell-dir DIR'
-    vars='WD40_BIN_DIR and WD40_SHELL_DIR'
+  if [ -z "$BIN_DIR" ] && [ -z "$RC_DIR" ]; then
+    what='--dir DIR and --rc-dir DIR'
+    vars='WD40_BIN_DIR and WD40_RC_DIR'
   elif [ -z "$BIN_DIR" ]; then
     what='--dir DIR'
     vars='WD40_BIN_DIR'
   else
-    what='--shell-dir DIR'
-    vars='WD40_SHELL_DIR'
+    what='--rc-dir DIR'
+    vars='WD40_RC_DIR'
   fi
 
   warn "HOME is not set, so the default install directory has no ~ to expand."
@@ -1714,7 +1510,7 @@ usage() {
 Usage: install.sh [options]
 
   -d, --dir DIR        directory for script symlinks (default: ~/.local/sbin)
-  -s, --shell-dir DIR  directory for shell files (default: ~/.zsh_aliases.d)
+  -r, --rc-dir DIR     directory for wd40rc symlink (default: ~/.config/wd40)
       --rc FILE        startup file to configure; repeatable, replaces the
                        default set of ~/.bashrc and ~/.zshrc. A FILE this
                        installer does not recognise is searched only for
@@ -1724,8 +1520,8 @@ Usage: install.sh [options]
   -u, --uninstall      remove this repository's symlinks
   -h, --help           show this help
 
-Script directory precedence: --dir > $WD40_BIN_DIR > ~/.local/sbin
-Shell directory precedence:  --shell-dir > $WD40_SHELL_DIR > ~/.zsh_aliases.d
+Script directory precedence: --dir    > $WD40_BIN_DIR > ~/.local/sbin
+Config directory precedence: --rc-dir > $WD40_RC_DIR  > ~/.config/wd40
 Startup files: every one of ~/.bashrc and ~/.zshrc that exists, unless --rc
 USAGE
 }
@@ -1748,11 +1544,11 @@ main() {
       --dir=*)
         BIN_DIR=${1#--dir=}; BIN_DIR_FROM_FLAG=1
         shift ;;
-      -s|--shell-dir)
+      -r|--rc-dir)
         [ $# -ge 2 ] || die "$1 requires an argument" 1
-        SHELL_DIR=$2; SHELL_DIR_FROM_FLAG=1; shift 2 ;;
-      --shell-dir=*)
-        SHELL_DIR=${1#--shell-dir=}; SHELL_DIR_FROM_FLAG=1
+        RC_DIR=$2; RC_DIR_FROM_FLAG=1; shift 2 ;;
+      --rc-dir=*)
+        RC_DIR=${1#--rc-dir=}; RC_DIR_FROM_FLAG=1
         shift ;;
       # An empty value is refused here rather than in a check after parsing,
       # which is where --dir and --shell-dir refuse theirs. The reason those
@@ -1797,7 +1593,7 @@ main() {
   # between one path and one spelling of it, whether the value came from a
   # flag, from the environment, or from the defaults above.
   BIN_DIR=$(strip_trailing_slashes "$BIN_DIR")
-  SHELL_DIR=$(strip_trailing_slashes "$SHELL_DIR")
+  RC_DIR=$(strip_trailing_slashes "$RC_DIR")
 
   if [ "$MODE" = "uninstall" ]; then
     do_uninstall
@@ -1824,12 +1620,8 @@ main() {
     # already have a DRY_RUN branch that prints the block instead of
     # writing it, so a dry run still leaves the disk untouched.
     warn_if_not_on_path
-    # Only when a shell file actually landed. A run that installed
-    # nothing but scripts has no reason to talk about SHELL_DIR at all,
-    # let alone to edit an rc file over it. install_one counts a dry run's
-    # links too, so this stays honest on a dry run as well.
-    if [ "$SHELL_LINKED" -gt 0 ]; then
-      warn_if_aliases_not_loaded
+    if [ "$RC_LINKED" -gt 0 ]; then
+      warn_if_not_sourced
     fi
     return 0
   fi
