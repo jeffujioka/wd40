@@ -107,3 +107,105 @@ ps_snapshot() {
     ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args=
   fi
 }
+
+# Reads "PID PPID PCPU PMEM COMM ARGS" from stdin (one ps_snapshot line per
+# process) and prints one line per root-ancestor group:
+#   ROOT_PID  TOTAL_CPU  TOTAL_MEM  MEMBER_COUNT  MEMBER_PIDS  ROOT_CMD
+# tab-separated, sorted per SORT_SPEC, capped at TOP_N groups, with a final
+# TOTAL line. MAX_DEPTH (empty = unlimited) caps how many PPID hops the walk
+# takes before it stops and uses whatever PID it last reached as the root.
+group_by_root() {
+  awk -v top_n="$TOP_N" -v max_depth="$MAX_DEPTH" -v sort_spec="$SORT_SPEC" '
+    {
+      pid = $1; ppid = $2; pcpu = $3; pmem = $4; comm = $5
+      # ARGS (field 6 onward) may contain spaces; rebuild it from the rest
+      # of the line instead of relying on a fixed field count.
+      args = ""
+      for (i = 6; i <= NF; i++) args = (i == 6) ? $i : args " " $i
+
+      PPID_OF[pid] = ppid
+      CMD_OF[pid] = (args != "" ? args : comm)
+      CPU_OF[pid] = pcpu
+      MEM_OF[pid] = pmem
+      ORDER[++n] = pid
+    }
+    END {
+      # Selection: sort all PIDs by %CPU desc, keep the top_n individuals
+      # whose CPU we will attribute to a root group. This mirrors "top N
+      # processes" before grouping collapses them, per the design spec.
+      for (i = 1; i <= n; i++) {
+        p = ORDER[i]
+        SEL[i] = p
+      }
+      # simple insertion sort by CPU desc - process counts here are in the
+      # hundreds at most, so O(n^2) is fine and keeps this awk portable
+      # without needing asort() (a gawk-only extension not present on BSD
+      # awk/macOS).
+      for (i = 2; i <= n; i++) {
+        key = SEL[i]; keycpu = CPU_OF[key] + 0
+        j = i - 1
+        while (j >= 1 && (CPU_OF[SEL[j]] + 0) < keycpu) {
+          SEL[j+1] = SEL[j]; j--
+        }
+        SEL[j+1] = key
+      }
+
+      take = (top_n < n) ? top_n : n
+      for (i = 1; i <= take; i++) {
+        pid = SEL[i]
+        root = pid
+        depth = 0
+        while (1) {
+          if (max_depth != "" && depth >= max_depth) break
+          parent = PPID_OF[root]
+          if (parent == "" || parent == root) break
+          if (!(parent in CMD_OF)) break
+          if (parent == 1) break
+          root = parent
+          depth++
+        }
+        if (!(root in SEEN)) {
+          SEEN[root] = 1
+          ROOT_LIST[++g] = root
+          ROOT_CMD[root] = CMD_OF[root]
+        }
+        ROOT_CPU[root] += CPU_OF[pid]
+        ROOT_MEM[root] += MEM_OF[pid]
+        ROOT_N[root]++
+        ROOT_MEMBERS[root] = (ROOT_MEMBERS[root] == "" \
+          ? pid : ROOT_MEMBERS[root] "," pid)
+        TOTAL_CPU += CPU_OF[pid]
+        TOTAL_MEM += MEM_OF[pid]
+        TOTAL_N++
+      }
+
+      # Sort the g groups per sort_spec ("cpu", "mem", or "name").
+      for (i = 1; i <= g; i++) GSEL[i] = ROOT_LIST[i]
+      for (i = 2; i <= g; i++) {
+        key = GSEL[i]
+        if (sort_spec == "mem") { keyval = ROOT_MEM[key] + 0 }
+        else if (sort_spec == "name") { keyval = ROOT_CMD[key] }
+        else { keyval = ROOT_CPU[key] + 0 }
+        j = i - 1
+        while (j >= 1) {
+          if (sort_spec == "name") {
+            cmp = (ROOT_CMD[GSEL[j]] > keyval)
+          } else {
+            cmpval = (sort_spec == "mem") ? ROOT_MEM[GSEL[j]] + 0 : ROOT_CPU[GSEL[j]] + 0
+            cmp = (cmpval < keyval)
+          }
+          if (!cmp) break
+          GSEL[j+1] = GSEL[j]; j--
+        }
+        GSEL[j+1] = key
+      }
+
+      for (i = 1; i <= g; i++) {
+        r = GSEL[i]
+        printf "%s\t%.1f\t%.1f\t%d\t%s\t%s\n", \
+          r, ROOT_CPU[r], ROOT_MEM[r], ROOT_N[r], ROOT_MEMBERS[r], ROOT_CMD[r]
+      }
+      printf "TOTAL\t%.1f\t%.1f\t%d\t-\t-\n", TOTAL_CPU, TOTAL_MEM, TOTAL_N
+    }
+  '
+}
