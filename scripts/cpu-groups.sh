@@ -102,7 +102,7 @@ ps_all_flag() {
 ps_snapshot() {
   all_flag="$(ps_all_flag)"
   if [ -n "$FILTER_USER" ]; then
-    ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args= -U "$FILTER_USER"
+    ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args= -U "$FILTER_USER" 2>/dev/null || true
   else
     ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args=
   fi
@@ -209,3 +209,50 @@ group_by_root() {
     }
   '
 }
+
+# Formats group_by_root's tab-separated lines into an aligned table.
+# MEMBER_PIDS is truncated to the first 8 entries plus "..." if there are
+# more, so one group with 47 members doesn't blow out the line width - the
+# true count is always in the N column regardless of truncation.
+format_groups() {
+  awk -F'\t' '
+    function truncate_pids(pids,    parts, i, count, out) {
+      count = split(pids, parts, ",")
+      if (count <= 8) return pids
+      out = ""
+      for (i = 1; i <= 8; i++) out = (i == 1) ? parts[i] : out "," parts[i]
+      return out ",..."
+    }
+    BEGIN {
+      printf "%-40s %7s %6s %4s  %s\n", "ROOT CMD", "%CPU", "%MEM", "N", "PIDS"
+    }
+    {
+      root = $1; cpu = $2; mem = $3; n = $4; members = $5; cmd = $6
+      if (root == "TOTAL") {
+        printf "%-40s %7s %6s %4s  %s\n", \
+          "----------------------------------------", "-------", "------", "----", "----"
+        printf "%-40s %7.1f %6.1f %4s  %s\n", "TOTAL", cpu, mem, n, "-"
+        next
+      }
+      display_cmd = cmd
+      if (length(display_cmd) > 40) display_cmd = substr(display_cmd, 1, 37) "..."
+      printf "%-40s %7.1f %6.1f %4d  %s\n", \
+        display_cmd, cpu, mem, n, truncate_pids(members)
+    }
+  '
+}
+
+main() {
+  count="$(ps_snapshot | wc -l | tr -d ' ')"
+  if [ "$count" -eq 0 ]; then
+    if [ -n "$FILTER_USER" ]; then
+      echo "No processes found for user '$FILTER_USER'."
+    else
+      echo "No processes found."
+    fi
+    exit 0
+  fi
+  ps_snapshot | group_by_root | format_groups
+}
+
+main
