@@ -14,6 +14,7 @@ that only earns its keep as one word at a prompt cannot be an executable.
 
 | Script | What it unsticks |
 |---|---|
+| [`cpu-groups.sh`](scripts/cpu-groups.sh) | Lists the top N CPU-consuming processes grouped by root ancestor command, so one build job's dozens of `java`/`javac`/`ninja` children collapse into a single group instead of dozens of unrelated-looking lines. |
 | [`smem-groups.sh`](scripts/smem-groups.sh) | Aggregates `smem -tk` output by process group. Sums Swap/USS/PSS/RSS per category and shows the real memory footprint (PSS+Swap) instead of 100+ per-process lines. |
 | [`wd40.sh`](scripts/wd40.sh) | Says what this repository provides, and whether it is installed here. |
 | [`whatsapp-diskusage.py`](scripts/whatsapp-diskusage.py) | Shows which WhatsApp chats consume the most disk space. Resolves JIDs to names, supports extension filters (`--video`, `--audio`, `--photos`), search, per-file listing, and interactive delete. macOS only. Requires [`uv`](https://docs.astral.sh/uv/). |
