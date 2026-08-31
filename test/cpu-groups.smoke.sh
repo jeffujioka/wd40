@@ -40,6 +40,8 @@ CHILD1_PID=$!
 bash -c "exec -a $CHILD2_CMD bash -c 'end=\$((SECONDS+5)); while [ \$SECONDS -lt \$end ]; do :; done'" &
 CHILD2_PID=$!
 
+trap 'kill "$CHILD1_PID" "$CHILD2_PID" 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
 sleep 1 # let both children accumulate measurable %CPU before snapshotting
 
 OUTPUT="$("$SCRIPT" -u "$USER" -n 20)"
@@ -65,9 +67,6 @@ if [ -n "$CHILD1_LINE" ] && [ -n "$CHILD2_LINE" ] && [ "$CHILD1_LINE" != "$CHILD
 else
   fail "--depth 0 should have kept the two children in separate groups"
 fi
-
-kill "$CHILD1_PID" "$CHILD2_PID" 2>/dev/null || true
-wait 2>/dev/null || true
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
