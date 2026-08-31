@@ -243,7 +243,8 @@ format_groups() {
 }
 
 main() {
-  count="$(ps_snapshot | wc -l | tr -d ' ')"
+  snapshot="$(ps_snapshot)"
+  count="$(printf '%s\n' "$snapshot" | grep -c . || true)"
   if [ "$count" -eq 0 ]; then
     if [ -n "$FILTER_USER" ]; then
       echo "No processes found for user '$FILTER_USER'."
@@ -252,7 +253,7 @@ main() {
     fi
     exit 0
   fi
-  ps_snapshot | group_by_root | format_groups
+  printf '%s\n' "$snapshot" | group_by_root | format_groups
 }
 
 main
