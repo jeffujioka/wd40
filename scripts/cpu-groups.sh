@@ -79,3 +79,31 @@ case "$SORT_SPEC" in
     echo "Error: unknown sort key '$SORT_SPEC'. Valid keys: cpu, mem, name" >&2
     exit 1 ;;
 esac
+
+# WHY -e VS -A: GNU ps (Linux) accepts -e for "every process". BSD ps
+# (macOS/Darwin) does not recognize -e and requires -A instead. Both accept
+# the same -o field-list syntax, so detecting the right "all processes"
+# flag is the only branch needed - same portability shape as
+# smem-groups.sh's -U passthrough, but decided once here instead of at
+# every call site.
+ps_all_flag() {
+  if ps -e >/dev/null 2>&1; then
+    printf '%s\n' "-e"
+  else
+    printf '%s\n' "-A"
+  fi
+}
+
+# Prints "PID PPID PCPU PMEM COMM ARGS" - one line per process, snapshotted
+# once. COMM and ARGS are always the last two fields (in that order) so a
+# downstream `awk '{print $1,$2,$3,$4,$5}'`-style split on 5 fields captures
+# the whole remainder of the line as field 5, without needing to guess how
+# many words the command line itself contains.
+ps_snapshot() {
+  all_flag="$(ps_all_flag)"
+  if [ -n "$FILTER_USER" ]; then
+    ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args= -U "$FILTER_USER"
+  else
+    ps "$all_flag" -o pid=,ppid=,pcpu=,pmem=,comm=,args=
+  fi
+}
